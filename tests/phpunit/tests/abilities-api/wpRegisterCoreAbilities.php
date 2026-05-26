@@ -299,6 +299,75 @@ class Tests_Abilities_API_WpRegisterCoreAbilities extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Tests that the `core/get-active-theme` ability is registered with the expected schema.
+	 */
+	public function test_core_get_active_theme_ability_is_registered(): void {
+		$ability = wp_get_ability( 'core/get-active-theme' );
+
+		$this->assertInstanceOf( WP_Ability::class, $ability );
+		$this->assertTrue( $ability->get_meta_item( 'show_in_rest', false ) );
+
+		$input_schema  = $ability->get_input_schema();
+		$output_schema = $ability->get_output_schema();
+
+		$this->assertSame( 'object', $input_schema['type'] );
+		$this->assertArrayHasKey( 'default', $input_schema );
+		$this->assertSame( array(), $input_schema['default'] );
+
+		// Input schema should expose an optional `fields` array with enum.
+		$this->assertArrayHasKey( 'fields', $input_schema['properties'] );
+		$this->assertSame( 'array', $input_schema['properties']['fields']['type'] );
+		foreach ( array( 'stylesheet', 'template', 'name', 'version', 'parent', 'tags' ) as $field ) {
+			$this->assertContains( $field, $input_schema['properties']['fields']['items']['enum'] );
+			$this->assertArrayHasKey( $field, $output_schema['properties'] );
+		}
+	}
+
+	/**
+	 * Tests executing the `core/get-active-theme` ability returns all fields by default.
+	 */
+	public function test_core_get_active_theme_executes(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$ability = wp_get_ability( 'core/get-active-theme' );
+
+		$result = $ability->execute();
+		$this->assertIsArray( $result );
+		$this->assertArrayHasKey( 'stylesheet', $result );
+		$this->assertArrayHasKey( 'name', $result );
+		$this->assertArrayHasKey( 'version', $result );
+		$this->assertSame( wp_get_theme()->get_stylesheet(), $result['stylesheet'] );
+
+		// Filter fields.
+		$result = $ability->execute(
+			array(
+				'fields' => array( 'stylesheet', 'name' ),
+			)
+		);
+		$this->assertIsArray( $result );
+		$this->assertCount( 2, $result );
+		$this->assertArrayHasKey( 'stylesheet', $result );
+		$this->assertArrayHasKey( 'name', $result );
+		$this->assertArrayNotHasKey( 'version', $result );
+	}
+
+	/**
+	 * Tests that `core/get-active-theme` requires the `switch_themes` capability.
+	 */
+	public function test_core_get_active_theme_requires_switch_themes(): void {
+		$subscriber_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		wp_set_current_user( $subscriber_id );
+
+		$ability = wp_get_ability( 'core/get-active-theme' );
+		$this->assertFalse( $ability->check_permissions() );
+
+		$result = $ability->execute();
+		$this->assertWPError( $result );
+		$this->assertSame( 'ability_invalid_permissions', $result->get_error_code() );
+	}
+
+	/**
 	 * Tests that all core ability schemas only use valid JSON Schema keywords.
 	 *
 	 * This prevents regressions where invalid keywords like 'examples' are used

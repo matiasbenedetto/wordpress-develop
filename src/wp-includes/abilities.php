@@ -319,4 +319,145 @@ function wp_register_core_abilities(): void {
 			),
 		)
 	);
+
+	$theme_properties = array(
+		'stylesheet'   => array(
+			'type'        => 'string',
+			'description' => __( 'The theme directory name (stylesheet slug).' ),
+		),
+		'template'     => array(
+			'type'        => 'string',
+			'description' => __( 'The template directory name. For child themes, this is the parent theme slug; for non-child themes, this is the same as `stylesheet`.' ),
+		),
+		'name'         => array(
+			'type'        => 'string',
+			'description' => __( 'The display name of the theme.' ),
+		),
+		'version'      => array(
+			'type'        => 'string',
+			'description' => __( 'The version of the theme.' ),
+		),
+		'description'  => array(
+			'type'        => 'string',
+			'description' => __( 'The description of the theme.' ),
+		),
+		'author'       => array(
+			'type'        => 'string',
+			'description' => __( 'The theme author name.' ),
+		),
+		'author_uri'   => array(
+			'type'        => 'string',
+			'format'      => 'uri',
+			'description' => __( 'The theme author URL.' ),
+		),
+		'theme_uri'    => array(
+			'type'        => 'string',
+			'format'      => 'uri',
+			'description' => __( 'The theme homepage URL.' ),
+		),
+		'status'       => array(
+			'type'        => 'string',
+			'enum'        => array( 'active', 'inactive' ),
+			'description' => __( 'Whether the theme is currently active on the site.' ),
+		),
+		'parent'       => array(
+			'type'        => array( 'string', 'null' ),
+			'description' => __( 'The parent theme stylesheet slug, or null if this is not a child theme.' ),
+		),
+		'screenshot'   => array(
+			'type'        => 'string',
+			'format'      => 'uri',
+			'description' => __( 'The URL of the theme screenshot, or an empty string if none.' ),
+		),
+		'tags'         => array(
+			'type'        => 'array',
+			'items'       => array( 'type' => 'string' ),
+			'description' => __( 'The theme tags declared in the theme header.' ),
+		),
+		'requires_wp'  => array(
+			'type'        => 'string',
+			'description' => __( 'The minimum WordPress version required by the theme.' ),
+		),
+		'requires_php' => array(
+			'type'        => 'string',
+			'description' => __( 'The minimum PHP version required by the theme.' ),
+		),
+		'text_domain'  => array(
+			'type'        => 'string',
+			'description' => __( 'The theme text domain.' ),
+		),
+	);
+	$theme_fields     = array_keys( $theme_properties );
+
+	$prepare_theme_data = static function ( WP_Theme $theme, array $field_keys, bool $is_active ): array {
+		$parent     = $theme->parent();
+		$screenshot = $theme->get_screenshot();
+		$tags       = $theme->get( 'Tags' );
+
+		$all = array(
+			'stylesheet'   => $theme->get_stylesheet(),
+			'template'     => $theme->get_template(),
+			'name'         => (string) $theme->get( 'Name' ),
+			'version'      => (string) $theme->get( 'Version' ),
+			'description'  => (string) $theme->get( 'Description' ),
+			'author'       => (string) $theme->get( 'Author' ),
+			'author_uri'   => (string) $theme->get( 'AuthorURI' ),
+			'theme_uri'    => (string) $theme->get( 'ThemeURI' ),
+			'status'       => $is_active ? 'active' : 'inactive',
+			'parent'       => $parent ? $parent->get_stylesheet() : null,
+			'screenshot'   => $screenshot ? (string) $screenshot : '',
+			'tags'         => is_array( $tags ) ? array_values( $tags ) : array(),
+			'requires_wp'  => (string) $theme->get( 'RequiresWP' ),
+			'requires_php' => (string) $theme->get( 'RequiresPHP' ),
+			'text_domain'  => (string) $theme->get( 'TextDomain' ),
+		);
+
+		return array_intersect_key( $all, $field_keys );
+	};
+
+	wp_register_ability(
+		'core/get-active-theme',
+		array(
+			'label'               => __( 'Get Active Theme' ),
+			'description'         => __( 'Returns information about the currently active theme. By default returns all fields, or optionally a filtered subset.' ),
+			'category'            => $category_site,
+			'input_schema'        => array(
+				'type'                 => 'object',
+				'properties'           => array(
+					'fields' => array(
+						'type'        => 'array',
+						'items'       => array(
+							'type' => 'string',
+							'enum' => $theme_fields,
+						),
+						'description' => __( 'Optional: Limit response to specific fields. If omitted, all fields are returned.' ),
+					),
+				),
+				'additionalProperties' => false,
+				'default'              => array(),
+			),
+			'output_schema'       => array(
+				'type'                 => 'object',
+				'properties'           => $theme_properties,
+				'additionalProperties' => false,
+			),
+			'execute_callback'    => static function ( $input = array() ) use ( $theme_fields, $prepare_theme_data ): array {
+				$input            = is_array( $input ) ? $input : array();
+				$requested_fields = ! empty( $input['fields'] ) ? $input['fields'] : $theme_fields;
+
+				return $prepare_theme_data( wp_get_theme(), array_flip( $requested_fields ), true );
+			},
+			'permission_callback' => static function (): bool {
+				return current_user_can( 'switch_themes' );
+			},
+			'meta'                => array(
+				'annotations'  => array(
+					'readonly'    => true,
+					'destructive' => false,
+					'idempotent'  => true,
+				),
+				'show_in_rest' => true,
+			),
+		)
+	);
 }
