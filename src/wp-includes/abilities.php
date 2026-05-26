@@ -663,4 +663,105 @@ function wp_register_core_abilities(): void {
 			),
 		)
 	);
+
+	wp_register_ability(
+		'core/activate-theme',
+		array(
+			'label'               => __( 'Activate Theme' ),
+			'description'         => __( 'Activates an installed theme by its stylesheet slug. Returns the previously active stylesheet and the newly active stylesheet.' ),
+			'category'            => $category_site,
+			'input_schema'        => array(
+				'type'                 => 'object',
+				'required'             => array( 'stylesheet' ),
+				'properties'           => array(
+					'stylesheet' => array(
+						'type'        => 'string',
+						'minLength'   => 1,
+						'pattern'     => '^[^\/:<>\*\?"\|]+(?:\/[^\/:<>\*\?"\|]+)?$',
+						'description' => __( 'The stylesheet slug (directory name) of the theme to activate.' ),
+					),
+				),
+				'additionalProperties' => false,
+			),
+			'output_schema'       => array(
+				'type'                 => 'object',
+				'required'             => array( 'stylesheet', 'previous_stylesheet', 'activated' ),
+				'properties'           => array(
+					'stylesheet'          => array(
+						'type'        => 'string',
+						'description' => __( 'The stylesheet slug of the now-active theme.' ),
+					),
+					'previous_stylesheet' => array(
+						'type'        => 'string',
+						'description' => __( 'The stylesheet slug of the theme that was active before this call.' ),
+					),
+					'activated'           => array(
+						'type'        => 'boolean',
+						'description' => __( 'Whether a theme switch occurred. False if the requested theme was already active.' ),
+					),
+				),
+				'additionalProperties' => false,
+			),
+			'execute_callback'    => static function ( $input ) {
+				$input = is_array( $input ) ? $input : array();
+				$theme = wp_get_theme( $input['stylesheet'] );
+
+				if ( ! $theme->exists() ) {
+					return new WP_Error(
+						'theme_not_found',
+						/* translators: %s: Theme stylesheet slug. */
+						sprintf( __( 'The theme "%s" was not found.' ), $input['stylesheet'] ),
+						array( 'status' => 404 )
+					);
+				}
+
+				if ( ! $theme->is_allowed() ) {
+					return new WP_Error(
+						'theme_not_allowed',
+						/* translators: %s: Theme stylesheet slug. */
+						sprintf( __( 'The theme "%s" is not allowed on this site.' ), $input['stylesheet'] ),
+						array( 'status' => 403 )
+					);
+				}
+
+				if ( $theme->errors() ) {
+					return new WP_Error(
+						'theme_broken',
+						$theme->errors()->get_error_message(),
+						array( 'status' => 409 )
+					);
+				}
+
+				$previous  = wp_get_theme()->get_stylesheet();
+				$requested = $theme->get_stylesheet();
+
+				if ( $previous === $requested ) {
+					return array(
+						'stylesheet'          => $requested,
+						'previous_stylesheet' => $previous,
+						'activated'           => false,
+					);
+				}
+
+				switch_theme( $requested );
+
+				return array(
+					'stylesheet'          => $requested,
+					'previous_stylesheet' => $previous,
+					'activated'           => true,
+				);
+			},
+			'permission_callback' => static function (): bool {
+				return current_user_can( 'switch_themes' );
+			},
+			'meta'                => array(
+				'annotations'  => array(
+					'readonly'    => false,
+					'destructive' => true,
+					'idempotent'  => true,
+				),
+				'show_in_rest' => true,
+			),
+		)
+	);
 }
