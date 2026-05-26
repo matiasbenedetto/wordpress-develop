@@ -460,4 +460,68 @@ function wp_register_core_abilities(): void {
 			),
 		)
 	);
+
+	wp_register_ability(
+		'core/get-theme-info',
+		array(
+			'label'               => __( 'Get Theme Information' ),
+			'description'         => __( 'Returns information about a specific installed theme by stylesheet slug. By default returns all fields, or optionally a filtered subset.' ),
+			'category'            => $category_site,
+			'input_schema'        => array(
+				'type'                 => 'object',
+				'required'             => array( 'stylesheet' ),
+				'properties'           => array(
+					'stylesheet' => array(
+						'type'        => 'string',
+						'minLength'   => 1,
+						'pattern'     => '^[^\/:<>\*\?"\|]+(?:\/[^\/:<>\*\?"\|]+)?$',
+						'description' => __( 'The stylesheet slug (directory name) of the theme to look up.' ),
+					),
+					'fields'     => array(
+						'type'        => 'array',
+						'items'       => array(
+							'type' => 'string',
+							'enum' => $theme_fields,
+						),
+						'description' => __( 'Optional: Limit response to specific fields. If omitted, all fields are returned.' ),
+					),
+				),
+				'additionalProperties' => false,
+			),
+			'output_schema'       => array(
+				'type'                 => 'object',
+				'properties'           => $theme_properties,
+				'additionalProperties' => false,
+			),
+			'execute_callback'    => static function ( $input ) use ( $theme_fields, $prepare_theme_data ) {
+				$input = is_array( $input ) ? $input : array();
+				$theme = wp_get_theme( $input['stylesheet'] );
+
+				if ( ! $theme->exists() ) {
+					return new WP_Error(
+						'theme_not_found',
+						/* translators: %s: Theme stylesheet slug. */
+						sprintf( __( 'The theme "%s" was not found.' ), $input['stylesheet'] ),
+						array( 'status' => 404 )
+					);
+				}
+
+				$requested_fields = ! empty( $input['fields'] ) ? $input['fields'] : $theme_fields;
+				$is_active        = $theme->get_stylesheet() === wp_get_theme()->get_stylesheet();
+
+				return $prepare_theme_data( $theme, array_flip( $requested_fields ), $is_active );
+			},
+			'permission_callback' => static function (): bool {
+				return current_user_can( 'switch_themes' );
+			},
+			'meta'                => array(
+				'annotations'  => array(
+					'readonly'    => true,
+					'destructive' => false,
+					'idempotent'  => true,
+				),
+				'show_in_rest' => true,
+			),
+		)
+	);
 }

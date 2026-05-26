@@ -368,6 +368,62 @@ class Tests_Abilities_API_WpRegisterCoreAbilities extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Tests executing the `core/get-theme-info` ability.
+	 */
+	public function test_core_get_theme_info_executes(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$ability    = wp_get_ability( 'core/get-theme-info' );
+		$stylesheet = wp_get_theme()->get_stylesheet();
+
+		$result = $ability->execute( array( 'stylesheet' => $stylesheet ) );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( $stylesheet, $result['stylesheet'] );
+		$this->assertArrayHasKey( 'name', $result );
+
+		// Filter fields.
+		$result = $ability->execute(
+			array(
+				'stylesheet' => $stylesheet,
+				'fields'     => array( 'stylesheet', 'name' ),
+			)
+		);
+		$this->assertCount( 2, $result );
+	}
+
+	/**
+	 * Tests that `core/get-theme-info` returns an error for a missing theme.
+	 */
+	public function test_core_get_theme_info_returns_error_for_missing_theme(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$ability = wp_get_ability( 'core/get-theme-info' );
+
+		$result = $ability->execute( array( 'stylesheet' => 'this-theme-does-not-exist' ) );
+
+		$this->assertWPError( $result );
+		$this->assertSame( 'theme_not_found', $result->get_error_code() );
+	}
+
+	/**
+	 * Tests that `core/get-theme-info` requires the `stylesheet` input.
+	 */
+	public function test_core_get_theme_info_requires_stylesheet(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$ability = wp_get_ability( 'core/get-theme-info' );
+
+		$result = $ability->execute( array() );
+
+		$this->assertWPError( $result );
+		$this->assertSame( 'ability_invalid_input', $result->get_error_code() );
+	}
+
+	/**
 	 * Tests that all core ability schemas only use valid JSON Schema keywords.
 	 *
 	 * This prevents regressions where invalid keywords like 'examples' are used
