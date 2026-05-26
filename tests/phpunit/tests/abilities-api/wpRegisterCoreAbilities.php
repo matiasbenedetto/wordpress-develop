@@ -424,6 +424,133 @@ class Tests_Abilities_API_WpRegisterCoreAbilities extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Tests executing the `core/get-themes` ability.
+	 */
+	public function test_core_get_themes_executes(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$ability = wp_get_ability( 'core/get-themes' );
+
+		$result = $ability->execute();
+
+		$this->assertIsArray( $result );
+		$this->assertArrayHasKey( 'active', $result );
+		$this->assertArrayHasKey( 'themes', $result );
+		$this->assertSame( wp_get_theme()->get_stylesheet(), $result['active'] );
+		$this->assertNotEmpty( $result['themes'] );
+
+		$active_slug   = $result['active'];
+		$found_active  = false;
+		foreach ( $result['themes'] as $theme ) {
+			$this->assertArrayHasKey( 'stylesheet', $theme );
+			$this->assertArrayHasKey( 'name', $theme );
+			if ( $theme['stylesheet'] === $active_slug ) {
+				$found_active = true;
+			}
+		}
+		$this->assertTrue( $found_active, 'The active theme should appear in the list.' );
+	}
+
+	/**
+	 * Tests filtering `core/get-themes` output via the `fields` parameter.
+	 */
+	public function test_core_get_themes_filters_fields(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$ability = wp_get_ability( 'core/get-themes' );
+
+		$result = $ability->execute(
+			array(
+				'fields' => array( 'stylesheet' ),
+			)
+		);
+
+		$this->assertIsArray( $result );
+		foreach ( $result['themes'] as $theme ) {
+			$this->assertSame( array( 'stylesheet' ), array_keys( $theme ) );
+		}
+	}
+
+	/**
+	 * Tests that `core/get-themes` filters by the `status` input.
+	 */
+	public function test_core_get_themes_filters_by_status(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$ability           = wp_get_ability( 'core/get-themes' );
+		$active_stylesheet = wp_get_theme()->get_stylesheet();
+
+		// Filter: active only.
+		$result = $ability->execute( array( 'status' => 'active' ) );
+		$this->assertIsArray( $result );
+		$this->assertCount( 1, $result['themes'] );
+		$this->assertSame( $active_stylesheet, $result['themes'][0]['stylesheet'] );
+		$this->assertSame( 'active', $result['themes'][0]['status'] );
+
+		// Filter: inactive only.
+		$result = $ability->execute( array( 'status' => 'inactive' ) );
+		$this->assertIsArray( $result );
+		// The active theme must be absent and every returned theme must be inactive.
+		foreach ( $result['themes'] as $theme ) {
+			$this->assertNotSame( $active_stylesheet, $theme['stylesheet'] );
+			$this->assertSame( 'inactive', $theme['status'] );
+		}
+
+		// Top-level `active` field is preserved regardless of filter.
+		$this->assertSame( $active_stylesheet, $result['active'] );
+	}
+
+	/**
+	 * Tests that `core/get-themes` rejects an invalid `status` value at the
+	 * schema layer.
+	 */
+	public function test_core_get_themes_rejects_invalid_status(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$ability = wp_get_ability( 'core/get-themes' );
+		$result  = $ability->execute( array( 'status' => 'publish' ) );
+
+		$this->assertWPError( $result );
+		$this->assertSame( 'ability_invalid_input', $result->get_error_code() );
+	}
+
+	/**
+	 * Tests that the theme `status` field exposes the active/inactive state of
+	 * the theme rather than the raw `Status:` header value.
+	 */
+	public function test_core_theme_abilities_status_reflects_active_state(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$active_stylesheet = wp_get_theme()->get_stylesheet();
+
+		// `core/get-active-theme` always reports active.
+		$result = wp_get_ability( 'core/get-active-theme' )->execute();
+		$this->assertSame( 'active', $result['status'] );
+
+		// `core/get-theme-info` reports active for the current theme.
+		$result = wp_get_ability( 'core/get-theme-info' )->execute( array( 'stylesheet' => $active_stylesheet ) );
+		$this->assertSame( 'active', $result['status'] );
+
+		// `core/get-themes` reports active only for the current theme.
+		$result = wp_get_ability( 'core/get-themes' )->execute();
+		$saw_active = false;
+		foreach ( $result['themes'] as $theme ) {
+			if ( $theme['stylesheet'] === $active_stylesheet ) {
+				$this->assertSame( 'active', $theme['status'] );
+				$saw_active = true;
+			} else {
+				$this->assertSame( 'inactive', $theme['status'] );
+			}
+		}
+		$this->assertTrue( $saw_active, 'The active theme should appear in the list.' );
+	}
+
+	/**
 	 * Tests that all core ability schemas only use valid JSON Schema keywords.
 	 *
 	 * This prevents regressions where invalid keywords like 'examples' are used

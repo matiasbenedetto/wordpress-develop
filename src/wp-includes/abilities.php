@@ -524,4 +524,143 @@ function wp_register_core_abilities(): void {
 			),
 		)
 	);
+
+	wp_register_ability(
+		'core/get-themes',
+		array(
+			'label'               => __( 'List Installed Themes' ),
+			'description'         => __( 'Returns a list of all installed themes along with the slug of the currently active one.' ),
+			'category'            => $category_site,
+			'input_schema'        => array(
+				'default' => (object) array(),
+				'oneOf'   => array(
+					// Branch 1: No filter (optionally with `fields` projection).
+					array(
+						'type'                 => 'object',
+						'properties'           => array(
+							'fields' => array(
+								'type'        => 'array',
+								'items'       => array(
+									'type' => 'string',
+									'enum' => $theme_fields,
+								),
+								'description' => __( 'Optional: Limit each theme entry to specific fields. If omitted, all fields are returned.' ),
+							),
+						),
+						'additionalProperties' => false,
+					),
+					// Branch 2: Filter by status.
+					array(
+						'type'                 => 'object',
+						'properties'           => array(
+							'fields' => array(
+								'type'        => 'array',
+								'items'       => array(
+									'type' => 'string',
+									'enum' => $theme_fields,
+								),
+								'description' => __( 'Optional: Limit each theme entry to specific fields. If omitted, all fields are returned.' ),
+							),
+							'status' => array(
+								'type'        => 'string',
+								'enum'        => array( 'active', 'inactive' ),
+								'description' => __( 'Filter the list to only include themes matching the given status.' ),
+							),
+						),
+						'required'             => array( 'status' ),
+						'additionalProperties' => false,
+					),
+					// Branch 3: Filter by stylesheets.
+					array(
+						'type'                 => 'object',
+						'properties'           => array(
+							'fields'      => array(
+								'type'        => 'array',
+								'items'       => array(
+									'type' => 'string',
+									'enum' => $theme_fields,
+								),
+								'description' => __( 'Optional: Limit each theme entry to specific fields. If omitted, all fields are returned.' ),
+							),
+							'stylesheets' => array(
+								'type'        => 'array',
+								'items'       => array(
+									'type'      => 'string',
+									'minLength' => 1,
+									'pattern'   => '^[^\/:<>\*\?"\|]+(?:\/[^\/:<>\*\?"\|]+)?$',
+								),
+								'minItems'    => 1,
+								'description' => __( 'Filter the list to only include themes whose stylesheet slug matches one of the given values.' ),
+							),
+						),
+						'required'             => array( 'stylesheets' ),
+						'additionalProperties' => false,
+					),
+				),
+			),
+			'output_schema'       => array(
+				'type'                 => 'object',
+				'required'             => array( 'active', 'themes' ),
+				'properties'           => array(
+					'active' => array(
+						'type'        => 'string',
+						'description' => __( 'The stylesheet slug of the currently active theme.' ),
+					),
+					'themes' => array(
+						'type'        => 'array',
+						'description' => __( 'The list of installed themes.' ),
+						'items'       => array(
+							'type'                 => 'object',
+							'properties'           => $theme_properties,
+							'additionalProperties' => false,
+						),
+					),
+				),
+				'additionalProperties' => false,
+			),
+			'execute_callback'    => static function ( $input = array() ) use ( $theme_fields, $prepare_theme_data ): array {
+				$input              = is_array( $input ) ? $input : array();
+				$requested_fields   = ! empty( $input['fields'] ) ? $input['fields'] : $theme_fields;
+				$field_keys         = array_flip( $requested_fields );
+				$status_filter      = isset( $input['status'] ) ? $input['status'] : null;
+				$stylesheets_filter = ! empty( $input['stylesheets'] ) ? array_flip( $input['stylesheets'] ) : null;
+
+				$active_stylesheet = wp_get_theme()->get_stylesheet();
+
+				$themes = array();
+				foreach ( wp_get_themes() as $theme ) {
+					$stylesheet = $theme->get_stylesheet();
+					$is_active  = $stylesheet === $active_stylesheet;
+
+					if ( 'active' === $status_filter && ! $is_active ) {
+						continue;
+					}
+					if ( 'inactive' === $status_filter && $is_active ) {
+						continue;
+					}
+					if ( null !== $stylesheets_filter && ! isset( $stylesheets_filter[ $stylesheet ] ) ) {
+						continue;
+					}
+
+					$themes[] = $prepare_theme_data( $theme, $field_keys, $is_active );
+				}
+
+				return array(
+					'active' => $active_stylesheet,
+					'themes' => $themes,
+				);
+			},
+			'permission_callback' => static function (): bool {
+				return current_user_can( 'switch_themes' );
+			},
+			'meta'                => array(
+				'annotations'  => array(
+					'readonly'    => true,
+					'destructive' => false,
+					'idempotent'  => true,
+				),
+				'show_in_rest' => true,
+			),
+		)
+	);
 }
