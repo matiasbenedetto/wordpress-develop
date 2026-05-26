@@ -551,6 +551,252 @@ class Tests_Abilities_API_WpRegisterCoreAbilities extends WP_UnitTestCase {
 	}
 
 	/**
+	 * Tests that the `core/activate-theme` ability is registered with destructive annotation.
+	 */
+	public function test_core_activate_theme_is_destructive(): void {
+		$ability = wp_get_ability( 'core/activate-theme' );
+
+		$this->assertInstanceOf( WP_Ability::class, $ability );
+		$annotations = $ability->get_meta_item( 'annotations', array() );
+		$this->assertFalse( $annotations['readonly'] );
+		$this->assertTrue( $annotations['destructive'] );
+	}
+
+	/**
+	 * Tests that `core/activate-theme` requires the `switch_themes` capability.
+	 */
+	public function test_core_activate_theme_requires_switch_themes(): void {
+		$subscriber_id = self::factory()->user->create( array( 'role' => 'subscriber' ) );
+		wp_set_current_user( $subscriber_id );
+
+		$ability = wp_get_ability( 'core/activate-theme' );
+		$this->assertFalse( $ability->check_permissions() );
+
+		$result = $ability->execute( array( 'stylesheet' => wp_get_theme()->get_stylesheet() ) );
+		$this->assertWPError( $result );
+		$this->assertSame( 'ability_invalid_permissions', $result->get_error_code() );
+	}
+
+	/**
+	 * Tests that `core/activate-theme` returns an error for a missing theme.
+	 */
+	public function test_core_activate_theme_returns_error_for_missing_theme(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$ability = wp_get_ability( 'core/activate-theme' );
+
+		$result = $ability->execute( array( 'stylesheet' => 'this-theme-does-not-exist' ) );
+
+		$this->assertWPError( $result );
+		$this->assertSame( 'theme_not_found', $result->get_error_code() );
+	}
+
+	/**
+	 * Tests that `core/activate-theme` is a no-op when activating the already-active theme.
+	 */
+	public function test_core_activate_theme_no_op_when_already_active(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$ability    = wp_get_ability( 'core/activate-theme' );
+		$stylesheet = wp_get_theme()->get_stylesheet();
+
+		$result = $ability->execute( array( 'stylesheet' => $stylesheet ) );
+
+		$this->assertIsArray( $result );
+		$this->assertSame( $stylesheet, $result['stylesheet'] );
+		$this->assertSame( $stylesheet, $result['previous_stylesheet'] );
+		$this->assertFalse( $result['activated'] );
+	}
+
+	/**
+	 * Tests that `core/activate-theme` switches the theme.
+	 */
+	public function test_core_activate_theme_switches_theme(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+		if ( is_multisite() ) {
+			grant_super_admin( $admin_id );
+		}
+
+		$themes = wp_get_themes();
+		if ( count( $themes ) < 2 ) {
+			$this->markTestSkipped( 'At least two installed themes are required to test theme switching.' );
+		}
+
+		$previous_stylesheet = wp_get_theme()->get_stylesheet();
+		$target              = null;
+		foreach ( $themes as $theme ) {
+			if ( $theme->get_stylesheet() !== $previous_stylesheet ) {
+				$target = $theme->get_stylesheet();
+				break;
+			}
+		}
+		$this->assertNotNull( $target );
+
+		// On multisite, themes must be network-enabled to be allowed for activation.
+		$allow_target = static function ( $allowed ) use ( $target ) {
+			$allowed[ $target ] = true;
+			return $allowed;
+		};
+		add_filter( 'allowed_themes', $allow_target );
+
+		try {
+			$ability = wp_get_ability( 'core/activate-theme' );
+			$result  = $ability->execute( array( 'stylesheet' => $target ) );
+
+			$this->assertIsArray( $result );
+			$this->assertSame( $target, $result['stylesheet'] );
+			$this->assertSame( $previous_stylesheet, $result['previous_stylesheet'] );
+			$this->assertTrue( $result['activated'] );
+			$this->assertSame( $target, wp_get_theme()->get_stylesheet() );
+		} finally {
+			remove_filter( 'allowed_themes', $allow_target );
+			// Restore the previously active theme so other tests are unaffected.
+			switch_theme( $previous_stylesheet );
+		}
+	}
+
+	/**
+	 * Tests that `core/get-theme-info` and `core/activate-theme` reject
+	 * stylesheet inputs that contain filesystem-reserved characters before
+	 * reaching the execute callback.
+	 *
+	 * @dataProvider data_invalid_stylesheet_inputs
+	 *
+	 * @param string $ability_name Ability name to invoke.
+	 * @param string $stylesheet   Invalid stylesheet input.
+	 */
+	public function test_core_theme_abilities_reject_invalid_stylesheet( string $ability_name, string $stylesheet ): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+
+		$ability = wp_get_ability( $ability_name );
+		$result  = $ability->execute( array( 'stylesheet' => $stylesheet ) );
+
+		$this->assertWPError( $result );
+		$this->assertSame( 'ability_invalid_input', $result->get_error_code() );
+	}
+
+	/**
+	 * Data provider for invalid stylesheet inputs.
+	 *
+	 * @return array<string, array{0: string, 1: string}>
+	 */
+	public function data_invalid_stylesheet_inputs(): array {
+		return array(
+			'get-theme-info: empty string'    => array( 'core/get-theme-info', '' ),
+			'get-theme-info: pipe character'  => array( 'core/get-theme-info', 'theme|name' ),
+			'get-theme-info: wildcard'        => array( 'core/get-theme-info', 'theme*' ),
+			'get-theme-info: angle bracket'   => array( 'core/get-theme-info', 'theme<name' ),
+			'activate-theme: empty string'    => array( 'core/activate-theme', '' ),
+			'activate-theme: colon character' => array( 'core/activate-theme', 'theme:name' ),
+			'activate-theme: question mark'   => array( 'core/activate-theme', 'theme?' ),
+		);
+	}
+
+	/**
+	 * Tests that `core/activate-theme` returns an error for a broken theme
+	 * (e.g., missing style.css).
+	 */
+	public function test_core_activate_theme_returns_error_for_broken_theme(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+		if ( is_multisite() ) {
+			grant_super_admin( $admin_id );
+		}
+
+		// Register the test themes directory, which contains a `broken-theme` fixture
+		// (an empty directory missing style.css).
+		$test_theme_root  = realpath( DIR_TESTDATA . '/themedir1' );
+		$orig_directories = $GLOBALS['wp_theme_directories'];
+
+		$GLOBALS['wp_theme_directories'] = array( WP_CONTENT_DIR . '/themes', $test_theme_root );
+
+		$filter_root = static function () use ( $test_theme_root ) {
+			return $test_theme_root;
+		};
+		add_filter( 'theme_root', $filter_root );
+		add_filter( 'stylesheet_root', $filter_root );
+		add_filter( 'template_root', $filter_root );
+
+		// On multisite, `is_allowed()` runs before the broken-theme check, so the
+		// fixture must be network-enabled to reach the code under test.
+		$allow_broken = static function ( $allowed ) {
+			$allowed['broken-theme'] = true;
+			return $allowed;
+		};
+		add_filter( 'allowed_themes', $allow_broken );
+
+		wp_clean_themes_cache();
+		unset( $GLOBALS['wp_themes'] );
+
+		try {
+			$ability = wp_get_ability( 'core/activate-theme' );
+			$result  = $ability->execute( array( 'stylesheet' => 'broken-theme' ) );
+
+			$this->assertWPError( $result );
+			$this->assertSame( 'theme_broken', $result->get_error_code() );
+			$this->assertSame( 409, $result->get_error_data()['status'] );
+		} finally {
+			remove_filter( 'theme_root', $filter_root );
+			remove_filter( 'stylesheet_root', $filter_root );
+			remove_filter( 'template_root', $filter_root );
+			remove_filter( 'allowed_themes', $allow_broken );
+			$GLOBALS['wp_theme_directories'] = $orig_directories;
+			wp_clean_themes_cache();
+			unset( $GLOBALS['wp_themes'] );
+		}
+	}
+
+	/**
+	 * Tests that `core/activate-theme` returns an error for a theme that is not
+	 * allowed on the site.
+	 *
+	 * `WP_Theme::is_allowed()` only returns false on multisite, so this test
+	 * requires a multisite installation.
+	 *
+	 * @group ms-required
+	 */
+	public function test_core_activate_theme_returns_error_for_disallowed_theme(): void {
+		$admin_id = self::factory()->user->create( array( 'role' => 'administrator' ) );
+		wp_set_current_user( $admin_id );
+		grant_super_admin( $admin_id );
+
+		$themes = wp_get_themes();
+		$target = null;
+		foreach ( $themes as $theme ) {
+			if ( $theme->get_stylesheet() !== wp_get_theme()->get_stylesheet() ) {
+				$target = $theme->get_stylesheet();
+				break;
+			}
+		}
+		if ( null === $target ) {
+			$this->markTestSkipped( 'At least two installed themes are required for this test.' );
+		}
+
+		// Force the theme to be disallowed on both network and site levels.
+		$deny_all = '__return_empty_array';
+		add_filter( 'allowed_themes', $deny_all );
+		add_filter( 'network_allowed_themes', $deny_all );
+		add_filter( 'site_allowed_themes', $deny_all );
+
+		try {
+			$ability = wp_get_ability( 'core/activate-theme' );
+			$result  = $ability->execute( array( 'stylesheet' => $target ) );
+
+			$this->assertWPError( $result );
+			$this->assertSame( 'theme_not_allowed', $result->get_error_code() );
+			$this->assertSame( 403, $result->get_error_data()['status'] );
+		} finally {
+			remove_filter( 'allowed_themes', $deny_all );
+			remove_filter( 'network_allowed_themes', $deny_all );
+			remove_filter( 'site_allowed_themes', $deny_all );
+		}
+	}
+
+	/**
 	 * Tests that all core ability schemas only use valid JSON Schema keywords.
 	 *
 	 * This prevents regressions where invalid keywords like 'examples' are used
